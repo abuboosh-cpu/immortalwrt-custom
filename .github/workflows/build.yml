@@ -1,0 +1,79 @@
+name: Build Custom ImmortalWrt
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Prepare Environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential clang flex bison gapp rsync which unzip gettext \
+          git python3 python3-pip libssl-dev libncurses5-dev libncursesw5-dev zlib1g-dev subversion
+
+      - name: Clone ImmortalWrt Source
+        run: |
+          git clone --depth 1 https://github.com/immortalwrt/immortalwrt.git openwrt
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Configure Firmware & Inject Settings
+        run: |
+          cd openwrt
+          
+          # إنشاء مجلد التخصيص المباشر للنظام
+          mkdir -p files/etc/config
+
+          # تفعيل القناة 147 افتراضياً عبر ضبط النطاق على US
+          cat << 'EOF' > files/etc/config/wireless
+          config wifi-device 'radio0'
+              option type 'mac80211'
+              option path 'platform/10000000.pci/pci0000:00/0000:00:00.0/0000:01:00.0'
+              option channel '147'
+              option band '5g'
+              option htmode 'HE80'
+              option country 'US'
+
+          config wifi-iface 'default_radio0'
+              option device 'radio0'
+              option network 'lan'
+              option mode 'ap'
+              option ssid 'ImmortalWrt_5G'
+              option encryption 'none'
+          EOF
+
+          # تعيين حزم النظام الأساسية (تضمين SSH و OPKG)
+          echo "CONFIG_TARGET_ramips=y" > .config
+          echo "CONFIG_TARGET_ramips_mt7621=y" >> .config
+          echo "CONFIG_TARGET_DEVICE_ramips_mt7621_DEVICE_km_kt704v6=y" >> .config
+          
+          # حزم SSH و LuCI OPKG
+          echo "CONFIG_PACKAGE_dropbear=y" >> .config
+          echo "CONFIG_PACKAGE_opkg=y" >> .config
+          echo "CONFIG_PACKAGE_luci-app-opkg=y" >> .config
+          echo "CONFIG_PACKAGE_luci=y" >> .config
+
+          make defconfig
+
+      - name: Download Package Bundles
+        run: |
+          cd openwrt
+          make download -j8
+
+      - name: Compile Firmware
+        run: |
+          cd openwrt
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload Firmware to Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: ImmortalWrt_sysupgrade_km_kt704v6
+          path: openwrt/bin/targets/*/*/*sysupgrade.bin
